@@ -449,7 +449,10 @@ $('#mute').onclick = () => { muted = !muted; song.muted = muted; $('#mute').clas
 /* =====================================================
    MUNDO
    ===================================================== */
-const T = 20, H = 12, VW = 384, VH = 240;
+const T = 20, H = 12, VH = 240;
+// el ancho visible se adapta a la forma de la pantalla (sin franjas negras a los lados)
+const VW_MIN = 384, VW_MAX = 620;
+let VW = VW_MIN;
 const G = 1500, JUMP = 455, RUN = 125, COYOTE = .1;
 
 const PHASES = [
@@ -536,20 +539,24 @@ function layout(){
   const land = innerWidth > innerHeight;
   document.body.classList.toggle('land', land);
   const reserve = isTouch ? (land ? 0 : 200) : 50;
-  const s = Math.min(innerWidth / VW, (innerHeight - reserve) / VH);
+  const availW = innerWidth, availH = Math.max(120, innerHeight - reserve);
+  VW = Math.round(clamp(VH * availW / availH, VW_MIN, VW_MAX));
+  const s = Math.min(availW / VW, availH / VH);
   $('#frame').style.width = VW*s + 'px'; $('#frame').style.height = VH*s + 'px';
+  if (cv.width !== VW*R){ cv.width = lightC.width = VW*R; cv.height = lightC.height = VH*R; }
   return s;
 }
 const s0 = layout();
 R = (s0 * (devicePixelRatio || 1)) >= 2.5 ? 3 : 2;
 cv.width = lightC.width = VW*R; cv.height = lightC.height = VH*R;
 addEventListener('resize', layout);
+addEventListener('orientationchange', () => setTimeout(layout, 250));
 
 function offscreen(w, h){ const c = document.createElement('canvas'); c.width = Math.ceil(w*R); c.height = Math.ceil(h*R); const x = c.getContext('2d'); x.setTransform(R,0,0,R,0,0); return [c, x]; }
 
 /* ---------- fondos (parallax) ---------- */
 function makeLayer(f, draw){
-  const w = Math.ceil(VW + (LPX - VW)*f) + 4;
+  const w = Math.ceil(LPX*f + VW_MAX*(1-f)) + 4; // alcanza para cualquier ancho de pantalla
   const [c, x] = offscreen(w, VH); draw(x, w); return { c, f };
 }
 function buildBackgrounds(def){
@@ -898,7 +905,7 @@ function render(){
   // HUD
   ctx.font = '600 7.5px Cinzel, serif'; ctx.fillStyle = 'rgba(225,233,245,.55)';
   ctx.textAlign = 'left'; ctx.fillText(PHASES[phase].name.toUpperCase(), 10, 15);
-  ctx.textAlign = 'right'; ctx.fillText('✦ ' + got + ' / ' + L.orbs.length, VW - 10, 15);
+  ctx.textAlign = 'right'; ctx.fillText('✦ ' + got + ' / ' + L.orbs.length, VW - 46, 15);
   // fundido
   if (fade > .001){ ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0,0,VW,VH); }
 }
