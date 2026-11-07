@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sincronizar subtítulos</title>
+<style>
+  body{font-family:system-ui,sans-serif;background:#0b0f18;color:#e6ecf5;max-width:720px;margin:0 auto;padding:24px;line-height:1.5}
+  h1{font-weight:600;font-size:1.5rem}
+  textarea{width:100%;height:200px;background:#111827;color:#e6ecf5;border:1px solid #334;border-radius:8px;padding:10px;font:14px/1.45 ui-monospace,monospace}
+  button{font-size:15px;padding:10px 16px;border-radius:8px;border:1px solid #4a6a8a;background:#1b2a3d;color:#fff;cursor:pointer;margin:6px 6px 6px 0}
+  #mark{display:block;width:100%;font-size:20px;padding:22px;background:#24476b;margin:12px 0}
+  #mark:disabled{opacity:.4}
+  .cur{font-size:20px;color:#9fd0ff;min-height:1.5em;margin:4px 0}
+  .nx{color:#7d8899;min-height:1.4em}
+  audio{width:100%;margin:10px 0}
+  code{background:#1b2333;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<h1>Sincronizar subtítulos</h1>
+<ol>
+  <li>Pega la letra abajo, una línea por renglón.</li>
+  <li>Pulsa <b>Empezar</b> y suena la canción desde el inicio.</li>
+  <li>Cada vez que <b>empiece</b> a cantarse la línea azul, pulsa <b>Espacio</b> (o el botón grande).</li>
+  <li>Al terminar, pulsa <b>Copiar</b> y pégalo en <code>subtitulos.js</code> entre las comillas <code>` `</code>.</li>
+</ol>
+<textarea id="src" placeholder="Pega aquí la letra, una línea por renglón..."></textarea>
+<div>
+  <button id="go">Empezar</button>
+  <button id="undo">Deshacer la última</button>
+</div>
+<audio id="a" src="And I Love Her (Remastered 2009).mp3" controls></audio>
+<p class="nx">Anterior: <span id="prev">—</span></p>
+<p class="cur" id="cur">Pega la letra y pulsa Empezar</p>
+<p class="nx">Siguiente: <span id="next">—</span></p>
+<button id="mark" disabled>Marcar línea (Espacio)</button>
+<h3>Resultado</h3>
+<textarea id="out" readonly></textarea>
+<button id="copy">Copiar</button> <span id="ok"></span>
+<script>
+const $ = s => document.querySelector(s);
+const a = $('#a');
+let lines = [], stamps = [];
+const fmt = t => { const m = Math.floor(t/60), s = (t - m*60).toFixed(2).padStart(5,'0'); return `[${String(m).padStart(2,'0')}:${s}]`; };
+function render(){
+  const i = stamps.length;
+  $('#prev').textContent = lines[i-1] || '—';
+  $('#cur').textContent = i < lines.length ? lines[i] : (lines.length ? '¡Listo! Copia el resultado.' : '');
+  $('#next').textContent = lines[i+1] || '—';
+  $('#mark').disabled = !lines.length || i >= lines.length;
+  $('#out').value = stamps.map((t,k) => fmt(t) + ' ' + lines[k]).join('\n');
+}
+$('#go').onclick = () => {
+  lines = $('#src').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (!lines.length) { $('#cur').textContent = 'Primero pega la letra arriba.'; return; }
+  stamps = []; a.currentTime = 0; a.play(); render(); $('#mark').focus();
+};
+function mark(){ if (stamps.length < lines.length){ stamps.push(a.currentTime); render(); } }
+$('#mark').onclick = mark;
+$('#undo').onclick = () => { stamps.pop(); a.currentTime = Math.max(0, (stamps[stamps.length-1] || 0)); render(); };
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && document.activeElement !== $('#src') && lines.length){ e.preventDefault(); mark(); }
+});
+$('#copy').onclick = async () => {
+  try { await navigator.clipboard.writeText($('#out').value); $('#ok').textContent = 'copiado ✓'; }
+  catch { $('#out').select(); document.execCommand('copy'); $('#ok').textContent = 'copiado ✓'; }
+};
+</script>
+</body>
+</html>
