@@ -117,6 +117,12 @@ body.touch.land .pb{pointer-events:auto;opacity:.6}
 .creases svg{display:block;width:100%;height:100%}
 .paper-wrap.prep{opacity:0}
 #poemO.on{transition:opacity .5s}
+.btn.easy{margin-top:0;font-size:13px;color:var(--muted)}
+#autoBtn{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:6;font-family:Cinzel,serif;font-size:11px;letter-spacing:.14em;
+  color:var(--muted);background:rgba(0,0,0,.45);border:1px solid var(--line);border-radius:999px;padding:.55em 1.2em;cursor:pointer;
+  opacity:0;pointer-events:none;transition:opacity .6s,color .3s,border-color .3s}
+#autoBtn.show{opacity:1;pointer-events:auto}
+#autoBtn.on{color:#ffe2a6;border-color:rgba(255,210,140,.6);box-shadow:0 0 14px rgba(255,200,120,.25)}
 #skip,#mute{position:fixed;z-index:5;font-family:Cinzel,serif;color:var(--muted);background:rgba(0,0,0,.4);
   border:1px solid var(--line);border-radius:999px;cursor:pointer;transition:opacity .5s}
 #skip{bottom:14px;left:50%;transform:translateX(-50%);font-size:12px;letter-spacing:.15em;padding:.6em 1.3em}
@@ -136,6 +142,8 @@ body.touch.land .pb{pointer-events:auto;opacity:.6}
     <svg class="orn" viewBox="0 0 320 16" style="transform:scaleY(-1)"><use href="#ornament"/></svg>
     <p class="sub" id="menuSub"></p>
     <button class="btn" id="startBtn"><span>Comenzar</span></button>
+    <button class="btn easy" id="easyBtn"><span>Modo fácil</span></button>
+    <p class="small" style="margin-top:-12px;font-size:14px">(el errante camina solo hasta el final)</p>
     <p class="small" id="howto"></p>
   </div>
 </div>
@@ -254,6 +262,7 @@ body.touch.land .pb{pointer-events:auto;opacity:.6}
 </div>
 <button id="skip" class="gone">mostrar todo</button>
 <button id="mute" title="Sonido">♪</button>
+<button id="autoBtn">✦ modo fácil</button>
 
 <svg width="0" height="0" style="position:absolute">
   <defs>
@@ -430,8 +439,9 @@ function updateSubs(){
 /* ---------- efectos de sonido suaves ---------- */
 let ac = null, muted = false;
 function A(){ if (!ac){ const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return null; ac = new AC(); } if (ac.state === 'suspended') ac.resume(); return ac; }
+let SIM = false; // true mientras el modo fácil "imagina" movimientos (sin sonido)
 function tone(f, dur, vol, type='sine', delay=0){
-  if (muted) return; const a = A(); if (!a) return;
+  if (muted || SIM) return; const a = A(); if (!a) return;
   const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + delay;
   o.type = type; o.frequency.value = f;
   g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t+.012); g.gain.exponentialRampToValueAtTime(.0001, t+dur);
@@ -934,14 +944,115 @@ function drawSouls(dt, t){
   }
 }
 
+/* ---------- modo fácil: el errante juega solo ----------
+   Cada décima de segundo prueba en "su cabeza" varias jugadas cortas (dar un paso,
+   saltar, esperar, tomar impulso...). Cada jugada termina parándose al aterrizar.
+   Simula cada una con la misma física del juego y elige la que más avanza y
+   lo deja de pie a salvo. */
+let autoplay = false;
+const BOT_DT = 1/120, BOT_MAX = 1.8;
+// tramos: [hasta_segundo, derecha, izquierda, mantener_salto]; tap = cuándo pulsa saltar.
+// Al acabar los tramos: sigue hacia la derecha mientras está en el aire y se detiene al tocar suelo
+// (o se queda quieto del todo si la jugada tiene stop:true).
+const PLANS = [
+  { n:'esperar',             segs:[[0,0,0,0]] },
+  { n:'paso',                segs:[[.15,1,0,0]] },
+  { n:'correr corto',        segs:[[.3,1,0,0]] },
+  { n:'correr',              segs:[[.6,1,0,0]] },
+  { n:'saltar',              segs:[[.6,1,0,1]], tap:0 },
+  { n:'salto corto',         segs:[[.12,1,0,1],[.45,1,0,0]], tap:0 },
+  { n:'salto con freno',     segs:[[.25,1,0,1],[.6,0,0,1]], tap:0, stop:true },
+  { n:'correr y saltar',     segs:[[.15,1,0,0],[.75,1,0,1]], tap:.15 },
+  { n:'correr más y saltar', segs:[[.3,1,0,0],[.9,1,0,1]], tap:.3 },
+  { n:'saltar en el sitio',  segs:[[.5,0,0,1]], tap:0, stop:true },
+  { n:'retroceder',          segs:[[.25,0,1,0]], stop:true },
+  { n:'tomar impulso',       segs:[[.22,0,1,0],[.4,1,0,0],[1,1,0,1]], tap:.4 },
+  { n:'tomar poco impulso',  segs:[[.12,0,1,0],[.26,1,0,0],[.86,1,0,1]], tap:.26 }
+];
+const bot = { plan:null, t:0, tapped:false, think:0, bestX:0, stuck:0 };
+function botSnap(){
+  const on = P.on ? (L.movers.includes(P.on) ? ['m', L.movers.indexOf(P.on)] : ['f', L.fallers.indexOf(P.on)]) : null;
+  return { P:{...P}, on, mv:L.movers.map(m => [m.x, m.v, m.dx]), fl:L.fallers.map(f => ({...f})),
+    orbs:L.orbs.map(o => o.got), checks:L.checks.map(c => c.on), respawn:{...respawn}, got, state, exitT, lockT,
+    time, deadT, fade, fadeTo, parts:parts.map(q => ({...q})), keys:{...keys}, jumpPressed };
+}
+function botRestore(s){
+  Object.assign(P, s.P); P.on = s.on ? (s.on[0] === 'm' ? L.movers[s.on[1]] : L.fallers[s.on[1]]) : null;
+  L.movers.forEach((m,i) => { [m.x, m.v, m.dx] = s.mv[i]; });
+  L.fallers.forEach((f,i) => Object.assign(f, s.fl[i]));
+  L.orbs.forEach((o,i) => o.got = s.orbs[i]); L.checks.forEach((c,i) => c.on = s.checks[i]);
+  respawn = s.respawn; got = s.got; state = s.state; exitT = s.exitT; lockT = s.lockT; time = s.time; deadT = s.deadT;
+  fade = s.fade; fadeTo = s.fadeTo; parts = s.parts; Object.assign(keys, s.keys); jumpPressed = s.jumpPressed;
+}
+const planEnd = pl => pl.segs[pl.segs.length-1][0];
+function planKeys(pl, t){
+  if (t >= planEnd(pl)){ keys.left = false; keys.jump = false; keys.right = !pl.stop && !P.ground; return; }
+  const sg = pl.segs.find(x => t < x[0]);
+  keys.right = !!sg[1]; keys.left = !!sg[2]; keys.jump = !!sg[3];
+}
+function botTry(pl){
+  const s = botSnap(); SIM = true;
+  const x0 = P.x, g0 = got, N = Math.round(BOT_MAX / BOT_DT), tapK = pl.tap === undefined ? -1 : Math.round(pl.tap / BOT_DT);
+  const endK = Math.round(planEnd(pl) / BOT_DT);
+  let dead = false, exit = false, settled = false, groundK = 0;
+  for (let k=0;k<N;k++){
+    planKeys(pl, k*BOT_DT); jumpPressed = (k === tapK);
+    step(BOT_DT);
+    if (P.dead){ dead = true; break; }
+    if (state === 'exiting'){ exit = true; break; }
+    groundK = P.ground ? groundK + 1 : 0;
+    // terminada la jugada, cuando lleva un momento de pie, se da por buena
+    if (k >= endK && groundK >= 14 && Math.abs(P.vx) < 20){ settled = true; break; }
+  }
+  const onFaller = !!(P.on && L.fallers.includes(P.on));
+  const r = { dead, exit, settled, onFaller, dx:P.x - x0, orbs:got - g0 };
+  botRestore(s); SIM = false;
+  return r;
+}
+function botScore(pl, r){
+  if (r.exit) return 1e6;
+  if (r.dead) return -1e6 + r.dx;
+  return r.dx + r.orbs*12 + (r.settled ? 10 : -40) - (r.onFaller ? 25 : 0) - (pl.tap !== undefined ? 2 : 0);
+}
+function botUpdate(dt){
+  if (state !== 'play' || P.dead || lockT > 0){ keys.left = keys.right = keys.jump = false; bot.plan = null; return; }
+  bot.t += dt; bot.think -= dt;
+  if (bot.phase !== phase){ bot.phase = phase; bot.bestX = P.x; bot.stuck = 0; }
+  // si lleva mucho rato sin avanzar, prueba jugadas distintas; nunca se rinde
+  if (P.x > bot.bestX + 8){ bot.bestX = P.x; bot.stuck = 0; } else bot.stuck += dt;
+  if (!bot.plan || bot.think <= 0){
+    let best = null, bs = -Infinity;
+    for (const pl of PLANS){ const sc = botScore(pl, botTry(pl)) + (bot.stuck > 12 ? Math.random()*300 : 0); if (sc > bs){ bs = sc; best = pl; } }
+    if (!(best === bot.plan && !P.ground)){ bot.plan = best; bot.t = 0; bot.tapped = false; }
+    // si eligió tomar impulso o un salto con retraso, lo termina antes de cambiar de idea
+    bot.think = Math.max(.1, (bot.plan.tap || 0) + .05);
+  }
+  planKeys(bot.plan, bot.t);
+  if (bot.plan.tap !== undefined && !bot.tapped && bot.t >= bot.plan.tap){ jumpPressed = true; bot.tapped = true; }
+}
+function setAutoplay(on){
+  autoplay = on;
+  keys.left = keys.right = keys.jump = false; bot.plan = null; bot.stuck = 0; bot.bestX = P.x;
+  $('#autoBtn').classList.toggle('on', on);
+  $('#autoBtn').textContent = on ? '✦ modo fácil: activado' : '✦ modo fácil';
+}
+
 /* ---------- bucle principal ---------- */
+// la física avanza siempre en pasos fijos de 1/120 s: se juega igual en cualquier pantalla
+let physAcc = 0;
+function advance(dt){
+  physAcc = Math.min(physAcc + dt, .1);
+  while (physAcc >= BOT_DT && (state === 'play' || state === 'exiting')){
+    if (autoplay) botUpdate(BOT_DT);
+    step(BOT_DT); physAcc -= BOT_DT;
+  }
+}
 let last = performance.now(), clock = 0;
 function frame(now){
   let dt = Math.min(.05, (now - last)/1000); last = now; clock += dt;
   drawSouls(dt, clock);
   if (state === 'play' || state === 'exiting'){
-    const n = Math.ceil(dt / (1/120)), h = dt / n;
-    for (let k=0;k<n;k++) step(h);
+    advance(dt);
     if (state === 'play' || state === 'exiting'){
       const target = clamp(P.x + P.w/2 - VW/2 + P.face*30, 0, LPX - VW);
       camX += (target - camX) * Math.min(1, dt*4);
@@ -976,18 +1087,21 @@ $$('.pb').forEach(b => {
 
 /* ---------- flujo ---------- */
 let started = false;
-function start(){
+function start(easy = false){
   if (started) return; started = true;
   A();
   song.currentTime = 0; song.play().catch(() => {});
   $('#menu').classList.remove('on');
-  setTimeout(() => { $('#stage').classList.add('on'); loadPhase(0); }, 900);
+  setTimeout(() => { $('#stage').classList.add('on'); loadPhase(0); setAutoplay(easy); $('#autoBtn').classList.add('show'); }, 900);
 }
-$('#startBtn').addEventListener('click', start);
+$('#startBtn').addEventListener('click', () => start(false));
+$('#easyBtn').addEventListener('click', () => start(true));
+$('#autoBtn').addEventListener('click', e => { e.currentTarget.blur(); setAutoplay(!autoplay); });
 
 let poemTimer = null;
 function toPoem(){
   state = 'poem';
+  $('#autoBtn').classList.remove('show');
   $('#stage').classList.remove('on');
   $('.paper-wrap').classList.add('prep');
   $('#poemO').scrollTop = 0;
